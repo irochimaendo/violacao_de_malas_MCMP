@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
@@ -49,84 +50,128 @@ class _MalaScreenState extends State<MalaScreen> {
 
   Future<void> _pedirPermissoes() async {
     // Garante que todas as permissões necessárias foram dadas
+    // Se o app fechar sozinho no Android 12+, pode ser falta de permissão no AndroidManifest
     await [
       Permission.bluetooth,
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
-      Permission.location, // Necessário para BLE no Android
+      Permission.location,
     ].request();
   }
 
   // --- LÓGICA DO BLUETOOTH ---
-// --- VERSÃO SEM FILTRO (MOSTRA TUDO) ---
   void _buscarDispositivos() async {
-    // 1. Limpa a lista anterior
-    setState(() {
-      dispositivosEncontrados.clear();
-      statusConexao = "Buscando (Modo Aberto)...";
-    });
+    try {
+      // Inicia a busca
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 15),
+        androidUsesFineLocation: true,
+      );
+    } catch (e) {
+      debugPrint("Erro ao iniciar scan: $e");
+    }
 
-    // 2. Ouve TUDO (Removemos o filtro .where)
-    var subscription = FlutterBluePlus.onScanResults.listen((results) {
-      setState(() {
-        dispositivosEncontrados = results; 
-      });
-    });
-
-    // 3. Começa a escanear por 10 segundos (aumentei o tempo)
-    // AllowDuplicates: true ajuda a achar dispositivos que enviam sinal repetido
-    await FlutterBluePlus.startScan(
-      timeout: const Duration(seconds: 10),
-      androidUsesFineLocation: true,
-    );
-
-    // 4. Para de ouvir
-    await FlutterBluePlus.stopScan();
-    subscription.cancel();
-
-    setState(() {
-      statusConexao = "Scan finalizado. ${dispositivosEncontrados.length} encontrados.";
-    });
-    
-    _mostrarListaDispositivos();
+    // Abre a janela IMEDIATAMENTE. O StreamBuilder vai preenchê-la.
+    if (mounted) {
+      _mostrarListaDispositivos();
+    }
   }
 
   void _mostrarListaDispositivos() {
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.grey[900],
+      isScrollControlled: true,
       builder: (context) {
-        return Column(
-          children: [
-            const Padding(
-              padding: EdgeInsets.all(15.0),
-              child: Text("Dispositivos Próximos", style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ),
-            Expanded(
-              child: ListView.builder(
-                itemCount: dispositivosEncontrados.length,
-                itemBuilder: (context, index) {
-                  final resultado = dispositivosEncontrados[index];
-                  return ListTile(
-                    title: Text(resultado.device.platformName, style: const TextStyle(color: Colors.white)),
-                    subtitle: Text(resultado.device.remoteId.toString(), style: const TextStyle(color: Colors.grey)),
-                    leading: const Icon(Icons.bluetooth, color: Colors.blue),
-                    onTap: () {
-                      // Aqui vamos conectar no futuro
-                      Navigator.pop(context); // Fecha a lista
-                      setState(() {
-                        statusConexao = "Conectado a ${resultado.device.platformName}";
-                        isConectado = true;
-                      });
-                    },
-                  );
-                },
+        return Container(
+          height: 500,
+          padding: const EdgeInsets.all(15.0),
+          child: Column(
+            children: [
+              const Text(
+                "Dispositivos Próximos", 
+                style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.white)
               ),
-            ),
-          ],
+              const SizedBox(height: 10),
+              Expanded(
+                child: StreamBuilder<List<ScanResult>>(
+                  stream: FlutterBluePlus.scanResults,
+                  initialData: const [],
+                  builder: (context, snapshot) {
+                    if (snapshot.hasError) {
+                      return const Center(child: Text("Erro no Scan"));
+                    }
+                    
+                    if (!snapshot.hasData || snapshot.data!.isEmpty) {
+                      return const Center(
+                        child: Text("Procurando...", style: TextStyle(color: Colors.grey))
+                      );
+                    }
+
+                    final resultados = snapshot.data!;
+
+                    return ListView.builder(
+                      itemCount: resultados.length,
+                      itemBuilder: (context, index) {
+                        final resultado = resultados[index];
+                        final nome = resultado.device.platformName.isNotEmpty 
+                            ? resultado.device.platformName 
+                            : "Dispositivo Desconhecido";
+                        
+                        return ListTile(
+                          title: Text(nome, style: const TextStyle(color: Colors.white)),
+                          subtitle: Text(resultado.device.remoteId.toString(), style: const TextStyle(color: Colors.grey)),
+                          leading: const Icon(Icons.bluetooth, color: Colors.blue),
+                          onTap: () {
+                            _conectarDispositivo(resultado.device);
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         );
       },
-    );
+    ).whenComplete(() {
+      FlutterBluePlus.stopScan();
+    });
+  }
+
+  // Função de conexão corrigida
+  void _conectarDispositivo(BluetoothDevice device) async {
+    Navigator.pop(context); // Fecha a lista
+    
+    setState(() {
+      statusConexao = "Conectando a ${device.platformName}...";
+    });
+
+    try {
+      // Conecta com timeout
+      await device.connect(timeout: const Duration(seconds: 15));
+      
+      // Solicita prioridade se for Android (Requer import dart:io)
+      if (Platform.isAndroid){
+        await device.requestMtu(512);
+      }
+
+      if (mounted) {
+        setState(() {
+          statusConexao = "Conectado a ${device.platformName}";
+          isConectado = true;
+        });
+      }
+
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          statusConexao = "Erro ao conectar: $e";
+          isConectado = false;
+        });
+      }
+    }
   }
 
   @override
@@ -156,7 +201,7 @@ class _MalaScreenState extends State<MalaScreen> {
             ),
             const SizedBox(height: 40),
             ElevatedButton.icon(
-              onPressed: _buscarDispositivos, // Chama a função de busca
+              onPressed: _buscarDispositivos,
               icon: const Icon(Icons.bluetooth_searching),
               label: const Text("BUSCAR MALA (DISPOSITIVOS)"),
               style: ElevatedButton.styleFrom(

@@ -19,7 +19,7 @@ class MalaPage extends StatefulWidget {
 }
 
 class _MalaPageState extends State<MalaPage> {
-  // UUIDs (Precisam ser iguais aos do ESP32)
+  // UUIDs (DEVEM SER IGUAIS AOS DO ESP32)
   final String SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
   final String CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
@@ -38,26 +38,25 @@ class _MalaPageState extends State<MalaPage> {
     _iniciarBusca();
   }
 
-  // 1. Pede permissão e busca a mala
+  // 1. Busca dispositivo
   Future<void> _iniciarBusca() async {
-    // Pede permissões no Android
     await [
       Permission.bluetoothScan,
       Permission.bluetoothConnect,
       Permission.location,
     ].request();
 
-    // Começa a escanear
-    FlutterBluePlus.startScan(timeout: const Duration(seconds: 10));
+    // Filtra pelo UUID do serviço para achar mais rápido
+    FlutterBluePlus.startScan(
+      timeout: const Duration(seconds: 15),
+      withServices: [Guid(SERVICE_UUID)], 
+    );
 
-    // Ouve os resultados do scan
     FlutterBluePlus.scanResults.listen((results) {
       for (ScanResult r in results) {
-        // Se achou o dispositivo pelo nome
-        if (r.device.platformName == "MALA_INTELIGENTE" || 
-            r.device.platformName == "MALA_TESTE_LDR") { // Coloquei os dois nomes por garantia
-          
-          FlutterBluePlus.stopScan(); // Para de buscar
+        // Aceita qualquer nome, desde que tenha o UUID certo
+        if (r.device.platformName == "Mala Inteligente" || r.advertisementData.serviceUuids.contains(Guid(SERVICE_UUID))) {
+          FlutterBluePlus.stopScan();
           _conectarMala(r.device);
           break;
         }
@@ -65,7 +64,7 @@ class _MalaPageState extends State<MalaPage> {
     });
   }
 
-  // 2. Conecta e descobre os serviços
+  // 2. Conecta
   Future<void> _conectarMala(BluetoothDevice device) async {
     setState(() {
       _statusMessage = "Conectando...";
@@ -77,10 +76,9 @@ class _MalaPageState extends State<MalaPage> {
       
       setState(() {
         _conectado = true;
-        _statusMessage = "Conectado! Lendo dados...";
+        _statusMessage = "Conectado! Aguardando...";
       });
 
-      // Descobre os serviços
       List<BluetoothService> services = await device.discoverServices();
       for (var service in services) {
         if (service.uuid.toString() == SERVICE_UUID) {
@@ -93,109 +91,159 @@ class _MalaPageState extends State<MalaPage> {
         }
       }
     } catch (e) {
-      print("Erro ao conectar: $e");
+      print("Erro: $e");
+      setState(() {
+        _statusMessage = "Erro ao conectar.";
+      });
     }
   }
 
-  // 3. Ouve o que o ESP32 está falando
+  // 3. Ouve notificações
   Future<void> _configurarNotificacoes(BluetoothCharacteristic c) async {
     await c.setNotifyValue(true);
     
-    // Escuta o fluxo de dados
     c.lastValueStream.listen((value) {
-      // Converte bytes para Texto
       String mensagem = String.fromCharCodes(value);
       _processarMensagem(mensagem);
     });
   }
 
-  // 4. A Lógica Inteligente (Traduz o código do ESP)
-  void _processarMensagem(String msg) {
+// 4. Lógica (CORRIGIDA)
+void _processarMensagem(String msg) {
     setState(() {
       if (msg == "S") {
-        // MALA SEGURA
         _estaViolada = false;
         _statusMessage = "Mala Segura";
         _bgColor = Colors.green;
-      } else if (msg.startsWith("V:")) {
-        // VIOLAÇÃO DETECTADA!
+      } 
+      else if (msg == "A") { // Adicionei o estado Desarmado pra ficar bonitinho
+         _estaViolada = false;
+         _statusMessage = "Sistema Desarmado";
+         _bgColor = Colors.grey;
+      }
+      else if (msg.startsWith("V:")) {
         _estaViolada = true;
         _statusMessage = "⚠️ MALA VIOLADA ⚠️";
         _bgColor = Colors.red;
 
-        // Pega o número depois do "V:" (ex: 15000)
-        String milissegundosStr = msg.substring(2); 
-        int msAtras = int.tryParse(milissegundosStr) ?? 0;
+        // 1. Pega o número de segundos que veio depois do "V:"
+        String segundosStr = msg.substring(2);
+        int segundosAtras = int.tryParse(segundosStr) ?? 0;
 
-        // Calcula a hora exata da violação
-        // Hora Atual - Tempo decorrido
-        DateTime dataViolacao = DateTime.now().subtract(Duration(milliseconds: msAtras));
+        // 2. Faz a conta mágica: Hora do Celular - Segundos de atraso
+        DateTime dataExata = DateTime.now().subtract(Duration(seconds: segundosAtras));
+
+        // 3. Formata para mostrar na tela (Dia/Mes Hora:Minuto)
+        String dia = dataExata.day.toString().padLeft(2, '0');
+        String mes = dataExata.month.toString().padLeft(2, '0');
+        String hora = dataExata.hour.toString().padLeft(2, '0');
+        String min = dataExata.minute.toString().padLeft(2, '0');
         
-        // Formata para mostrar hora e minuto (ex: 14:35)
-        String hora = dataViolacao.hour.toString().padLeft(2, '0');
-        String minuto = dataViolacao.minute.toString().padLeft(2, '0');
-        _horaViolacao = "$hora:$minuto";
+        _horaViolacao = "$dia/$mes às $hora:$min";
       }
     });
   }
 
-  // 5. Função de Reset (Igual você fez no nRF Connect)
-  void _resetarAlarme() async {
+  // 5. Envia COMANDOS
+  void _enviarComando(String cmd) async {
     if (_characteristic != null) {
-      // Envia a palavra "RESET" para o ESP32
-      await _characteristic!.write(utf8.encode("RESET"));
-      
-      // Feedback visual imediato
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Comando de Reset enviado!"))
-      );
+      await _characteristic!.write(utf8.encode(cmd));
     }
+  }
+
+  // --- NOVO: Função para Sincronizar Relógio ---
+  void _sincronizarRelogio() {
+    DateTime agora = DateTime.now();
+    // Formata no padrão T:AAAA:MM:DD:HH:MM:SS
+    String cmd = "T:${agora.year}:${agora.month}:${agora.day}:${agora.hour}:${agora.minute}:${agora.second}";
+    
+    print("Enviando hora: $cmd"); // Debug
+    _enviarComando(cmd);
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: _bgColor, // Muda a cor do fundo dinamicamente
-      appBar: AppBar(title: const Text("Monitor de Mala"), elevation: 0, backgroundColor: Colors.transparent,),
+      backgroundColor: _bgColor,
+      appBar: AppBar(
+        title: const Text("App Mala Inteligente"), 
+        backgroundColor: Colors.transparent, 
+        elevation: 0,
+        actions: [
+          // Ícone para ver se está conectado
+          Icon(_conectado ? Icons.bluetooth_connected : Icons.bluetooth_disabled),
+          const SizedBox(width: 20),
+        ],
+      ),
       body: Center(
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            // Ícone Gigante
             Icon(
-              _estaViolada ? Icons.lock_open : Icons.lock,
+              _estaViolada ? Icons.no_encryption : Icons.lock,
               size: 100,
               color: Colors.white,
             ),
             const SizedBox(height: 20),
             
-            // Texto de Status
             Text(
               _statusMessage,
-              style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.white),
+              textAlign: TextAlign.center,
+              style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Colors.white),
             ),
             
-            // Se estiver violada, mostra a hora
             if (_estaViolada) ...[
               const SizedBox(height: 10),
-              Text(
-                "Ocorreu às: $_horaViolacao",
-                style: const TextStyle(fontSize: 40, fontWeight: FontWeight.bold, color: Colors.yellow),
+              Container(
+                padding: EdgeInsets.all(10),
+                color: Colors.black26,
+                child: Text(
+                  "Data: $_horaViolacao",
+                  style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.yellow),
+                ),
               ),
-              const SizedBox(height: 40),
-              
-              // Botão de RESET
+            ],
+
+            const SizedBox(height: 50),
+
+            // --- BOTÕES DE CONTROLE ---
+            
+            // 1. Botão ARMAR
+            if (!_estaViolada)
               ElevatedButton.icon(
-                onPressed: _resetarAlarme,
-                icon: const Icon(Icons.refresh),
-                label: const Text("DESATIVAR ALARME / RESETAR"),
+                onPressed: () => _enviarComando("ARMAR"),
+                icon: const Icon(Icons.security),
+                label: const Text("ATIVAR ALARME"),
                 style: ElevatedButton.styleFrom(
                   backgroundColor: Colors.white,
-                  foregroundColor: Colors.red,
-                  padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                  foregroundColor: Colors.green[800],
+                  padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
                 ),
-              )
-            ]
+              ),
+
+            const SizedBox(height: 20),
+
+            // 2. Botão RESET (Aparece sempre para permitir cancelar ou limpar erro)
+            ElevatedButton.icon(
+              onPressed: () => _enviarComando("RESET"),
+              icon: const Icon(Icons.refresh),
+              label: const Text("RESETAR / DESARMAR"),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.red,
+                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+              ),
+            ),
+
+            const SizedBox(height: 40),
+            Divider(color: Colors.white54),
+            
+            // 3. Botão SINCRONIZAR RELÓGIO (Novo!)
+            TextButton.icon(
+              onPressed: _conectado ? _sincronizarRelogio : null,
+              icon: const Icon(Icons.access_time, color: Colors.white),
+              label: const Text("Sincronizar Relógio com Celular", style: TextStyle(color: Colors.white)),
+            )
           ],
         ),
       ),

@@ -107,7 +107,7 @@ class _MalaPageState extends State<MalaPage> {
       _processarMensagem(mensagem);
     });
   }
-
+  
 // 4. Lógica (CORRIGIDA)
 void _processarMensagem(String msg) {
     setState(() {

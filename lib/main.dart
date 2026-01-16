@@ -1,5 +1,5 @@
 import 'dart:async';
-import 'dart:convert'; // Para usar utf8
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -7,157 +7,204 @@ import 'package:permission_handler/permission_handler.dart';
 void main() {
   runApp(const MaterialApp(
     debugShowCheckedModeBanner: false,
-    home: MalaPage(),
+    home: ScanPage(),
   ));
 }
 
-class MalaPage extends StatefulWidget {
-  const MalaPage({super.key});
-
+class ScanPage extends StatefulWidget {
+  const ScanPage({super.key});
   @override
-  State<MalaPage> createState() => _MalaPageState();
+  State<ScanPage> createState() => _ScanPageState();
 }
 
-class _MalaPageState extends State<MalaPage> {
-  // UUIDs (DEVEM SER IGUAIS AOS DO ESP32)
-  final String SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
-  final String CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
-
-  // Variáveis de Estado
-  BluetoothDevice? _device;
-  BluetoothCharacteristic? _characteristic;
-  String _statusMessage = "Procurando Mala...";
-  Color _bgColor = Colors.grey;
-  String _horaViolacao = "--:--";
-  bool _estaViolada = false;
-  bool _conectado = false;
+class _ScanPageState extends State<ScanPage> {
+  List<ScanResult> _scanResults = [];
+  bool _isScanning = false;
 
   @override
   void initState() {
     super.initState();
-    _iniciarBusca();
+    _pedirPermissoes();
   }
 
-  // 1. Busca dispositivo
-  Future<void> _iniciarBusca() async {
-    await [
-      Permission.bluetoothScan,
-      Permission.bluetoothConnect,
-      Permission.location,
-    ].request();
+  Future<void> _pedirPermissoes() async {
+    await [Permission.bluetoothScan, Permission.bluetoothConnect, Permission.location].request();
+  }
 
-    // Filtra pelo UUID do serviço para achar mais rápido
-    FlutterBluePlus.startScan(
-      timeout: const Duration(seconds: 15),
-      withServices: [Guid(SERVICE_UUID)], 
-    );
-
+  Future<void> _iniciarScan() async {
+    setState(() { _isScanning = true; _scanResults.clear(); });
+    // SCANNER ABERTO (Sem filtro de UUID para evitar bug de não encontrar)
+    await FlutterBluePlus.startScan(timeout: const Duration(seconds: 5));
     FlutterBluePlus.scanResults.listen((results) {
-      for (ScanResult r in results) {
-        // Aceita qualquer nome, desde que tenha o UUID certo
-        if (r.device.platformName == "Mala Inteligente" || r.advertisementData.serviceUuids.contains(Guid(SERVICE_UUID))) {
-          FlutterBluePlus.stopScan();
-          _conectarMala(r.device);
-          break;
-        }
-      }
+      final filtered = results.where((r) => r.device.platformName.isNotEmpty).toList();
+      if (mounted) setState(() => _scanResults = filtered);
     });
+    await Future.delayed(const Duration(seconds: 5));
+    if (mounted) setState(() => _isScanning = false);
   }
 
-  // 2. Conecta
-  Future<void> _conectarMala(BluetoothDevice device) async {
-    setState(() {
-      _statusMessage = "Conectando...";
-    });
+  void _irParaMonitor(BluetoothDevice device) {
+    FlutterBluePlus.stopScan();
+    Navigator.push(context, MaterialPageRoute(builder: (context) => MonitorPage(device: device)));
+  }
 
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text("Parear Mala"), centerTitle: true),
+      body: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.all(20.0),
+            child: ElevatedButton.icon(
+              onPressed: _isScanning ? null : _iniciarScan,
+              icon: _isScanning ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator()) : const Icon(Icons.search),
+              label: Text(_isScanning ? "Buscando..." : "BUSCAR DISPOSITIVOS"),
+              style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15)),
+            ),
+          ),
+          const Divider(),
+          Expanded(
+            child: _scanResults.isEmpty
+                ? const Center(child: Text("Nenhum dispositivo encontrado."))
+                : ListView.builder(
+                    itemCount: _scanResults.length,
+                    itemBuilder: (context, index) {
+                      final result = _scanResults[index];
+                      return Card(
+                        child: ListTile(
+                          title: Text(result.device.platformName, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          subtitle: Text(result.device.remoteId.toString()),
+                          trailing: ElevatedButton(child: const Text("CONECTAR"), onPressed: () => _irParaMonitor(result.device)),
+                        ),
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class MonitorPage extends StatefulWidget {
+  final BluetoothDevice device;
+  const MonitorPage({super.key, required this.device});
+
+  @override
+  State<MonitorPage> createState() => _MonitorPageState();
+}
+
+class _MonitorPageState extends State<MonitorPage> {
+  final String SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+  final String CHAR_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
+
+  BluetoothCharacteristic? _characteristic;
+  
+  // ESTADOS DA TELA
+  String _statusMessage = "Conectando...";
+  Color _bgColor = Colors.blueGrey;
+  String _horaViolacao = "--:--";
+  
+  // ESTADOS LÓGICOS
+  bool _conectado = false;
+  bool _estaViolada = false;
+  bool _estaArmada = false; 
+
+  @override
+  void initState() {
+    super.initState();
+    _conectarMala();
+  }
+  
+  @override
+  void dispose() {
+    // Ao sair da tela, desconecta para economizar bateria
+    widget.device.disconnect();
+    super.dispose();
+  }
+
+  Future<void> _conectarMala() async {
+    setState(() => _statusMessage = "Sincronizando...");
     try {
-      await device.connect();
-      _device = device;
+      await widget.device.connect();
       
-      setState(() {
-        _conectado = true;
-        _statusMessage = "Conectado! Aguardando...";
-      });
-
-      List<BluetoothService> services = await device.discoverServices();
+      List<BluetoothService> services = await widget.device.discoverServices();
       for (var service in services) {
         if (service.uuid.toString() == SERVICE_UUID) {
           for (var c in service.characteristics) {
             if (c.uuid.toString() == CHAR_UUID) {
               _characteristic = c;
-              _configurarNotificacoes(c);
+            
+              await c.setNotifyValue(true);
+              c.lastValueStream.listen((value) {
+                String msg = String.fromCharCodes(value);
+                _processarMensagem(msg);
+              });
+              
+              await Future.delayed(const Duration(milliseconds: 200)); // Pequeno respiro
+              await c.write(utf8.encode("STATUS"));
+              
+              if(mounted) setState(() => _conectado = true);
             }
           }
         }
       }
     } catch (e) {
-      print("Erro: $e");
-      setState(() {
-        _statusMessage = "Erro ao conectar.";
-      });
+      if(mounted) setState(() { _statusMessage = "Erro de Conexão"; _conectado = false; });
     }
   }
 
-  // 3. Ouve notificações
-  Future<void> _configurarNotificacoes(BluetoothCharacteristic c) async {
-    await c.setNotifyValue(true);
-    
-    c.lastValueStream.listen((value) {
-      String mensagem = String.fromCharCodes(value);
-      _processarMensagem(mensagem);
-    });
-  }
-  
-// 4. Lógica (CORRIGIDA)
-void _processarMensagem(String msg) {
+  void _processarMensagem(String msg) {
+    if (!mounted) return;
     setState(() {
-      if (msg == "S") {
+      // ESTADO: DESARMADO (A)
+      if (msg == "A") {
         _estaViolada = false;
-        _statusMessage = "Mala Segura";
-        _bgColor = Colors.green;
+        _estaArmada = false;
+        _statusMessage = "Sistema Desarmado";
+        _bgColor = Colors.grey[700]!;
       } 
-      else if (msg == "A") { // Adicionei o estado Desarmado pra ficar bonitinho
-         _estaViolada = false;
-         _statusMessage = "Sistema Desarmado";
-         _bgColor = Colors.grey;
+      // ESTADO: ARMADO/SEGURO (S)
+      else if (msg == "S") {
+        _estaViolada = false;
+        _estaArmada = true;
+        _statusMessage = "🛡️ Mala Protegida";
+        _bgColor = Colors.green[800]!;
       }
+      // ESTADO: VIOLADO 
       else if (msg.startsWith("V:")) {
         _estaViolada = true;
+        _estaArmada = true; // Continua armada, mas violada
         _statusMessage = "⚠️ MALA VIOLADA ⚠️";
-        _bgColor = Colors.red;
+        _bgColor = Colors.red[900]!;
 
-        // 1. Pega o número de segundos que veio depois do "V:"
         String segundosStr = msg.substring(2);
         int segundosAtras = int.tryParse(segundosStr) ?? 0;
-
-        // 2. Faz a conta mágica: Hora do Celular - Segundos de atraso
         DateTime dataExata = DateTime.now().subtract(Duration(seconds: segundosAtras));
-
-        // 3. Formata para mostrar na tela (Dia/Mes Hora:Minuto)
+        
         String dia = dataExata.day.toString().padLeft(2, '0');
         String mes = dataExata.month.toString().padLeft(2, '0');
         String hora = dataExata.hour.toString().padLeft(2, '0');
         String min = dataExata.minute.toString().padLeft(2, '0');
-        
         _horaViolacao = "$dia/$mes às $hora:$min";
+      }
+
+      else if (msg == "HORA_OK") {
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Relógio Sincronizado!")));
       }
     });
   }
 
-  // 5. Envia COMANDOS
   void _enviarComando(String cmd) async {
     if (_characteristic != null) {
       await _characteristic!.write(utf8.encode(cmd));
     }
   }
-
-  // --- NOVO: Função para Sincronizar Relógio ---
+  
   void _sincronizarRelogio() {
     DateTime agora = DateTime.now();
-    // Formata no padrão T:AAAA:MM:DD:HH:MM:SS
     String cmd = "T:${agora.year}:${agora.month}:${agora.day}:${agora.hour}:${agora.minute}:${agora.second}";
-    
-    print("Enviando hora: $cmd"); // Debug
     _enviarComando(cmd);
   }
 
@@ -166,13 +213,13 @@ void _processarMensagem(String msg) {
     return Scaffold(
       backgroundColor: _bgColor,
       appBar: AppBar(
-        title: const Text("App Mala Inteligente"), 
-        backgroundColor: Colors.transparent, 
-        elevation: 0,
+        title: const Text("Monitoramento"), backgroundColor: Colors.transparent, elevation: 0,
         actions: [
-          // Ícone para ver se está conectado
-          Icon(_conectado ? Icons.bluetooth_connected : Icons.bluetooth_disabled),
-          const SizedBox(width: 20),
+          IconButton(
+             icon: const Icon(Icons.access_time),
+             onPressed: _conectado ? _sincronizarRelogio : null,
+             tooltip: "Sincronizar Relógio",
+          )
         ],
       ),
       body: Center(
@@ -180,12 +227,10 @@ void _processarMensagem(String msg) {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Icon(
-              _estaViolada ? Icons.no_encryption : Icons.lock,
-              size: 100,
-              color: Colors.white,
+              _estaViolada ? Icons.lock_open : (_estaArmada ? Icons.lock : Icons.lock_open_outlined),
+              size: 100, color: Colors.white,
             ),
             const SizedBox(height: 20),
-            
             Text(
               _statusMessage,
               textAlign: TextAlign.center,
@@ -193,57 +238,54 @@ void _processarMensagem(String msg) {
             ),
             
             if (_estaViolada) ...[
-              const SizedBox(height: 10),
+              const SizedBox(height: 20),
               Container(
-                padding: EdgeInsets.all(10),
-                color: Colors.black26,
-                child: Text(
-                  "Data: $_horaViolacao",
-                  style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.yellow),
+                padding: const EdgeInsets.all(15),
+                decoration: BoxDecoration(
+                  color: Colors.black38,
+                  border: Border.all(color: Colors.yellow, width: 2),
+                  borderRadius: BorderRadius.circular(10)
+                ),
+                child: Column(
+                  children: [
+                    const Text("Abertura ocorreu em:", style: TextStyle(color: Colors.white70)),
+                    Text(_horaViolacao, style: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.yellow)),
+                  ],
                 ),
               ),
             ],
 
             const SizedBox(height: 50),
 
-            // --- BOTÕES DE CONTROLE ---
             
-            // 1. Botão ARMAR
-            if (!_estaViolada)
-              ElevatedButton.icon(
-                onPressed: () => _enviarComando("ARMAR"),
-                icon: const Icon(Icons.security),
-                label: const Text("ATIVAR ALARME"),
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: Colors.white,
-                  foregroundColor: Colors.green[800],
-                  padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+            if (_conectado) ...[
+              if (!_estaArmada)
+                ElevatedButton.icon(
+                  onPressed: () => _enviarComando("ARMAR"),
+                  icon: const Icon(Icons.shield),
+                  label: const Text("ATIVAR MONITORAMENTO"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white, foregroundColor: Colors.green[900],
+                    padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                  ),
                 ),
-              ),
 
-            const SizedBox(height: 20),
 
-            // 2. Botão RESET (Aparece sempre para permitir cancelar ou limpar erro)
-            ElevatedButton.icon(
-              onPressed: () => _enviarComando("RESET"),
-              icon: const Icon(Icons.refresh),
-              label: const Text("RESETAR / DESARMAR"),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.white,
-                foregroundColor: Colors.red,
-                padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
-              ),
-            ),
-
-            const SizedBox(height: 40),
-            Divider(color: Colors.white54),
-            
-            // 3. Botão SINCRONIZAR RELÓGIO (Novo!)
-            TextButton.icon(
-              onPressed: _conectado ? _sincronizarRelogio : null,
-              icon: const Icon(Icons.access_time, color: Colors.white),
-              label: const Text("Sincronizar Relógio com Celular", style: TextStyle(color: Colors.white)),
-            )
+              if (_estaArmada)
+                ElevatedButton.icon(
+                  onPressed: () => _enviarComando("RESET"),
+                  icon: const Icon(Icons.power_settings_new),
+                  label: Text(_estaViolada ? "RESETAR ALARME" : "DESATIVAR"),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: Colors.white, foregroundColor: Colors.red,
+                    padding: const EdgeInsets.symmetric(horizontal: 30, vertical: 15),
+                  ),
+                ),
+            ] else ...[
+               const CircularProgressIndicator(color: Colors.white),
+               const SizedBox(height: 10),
+               const Text("Sincronizando...", style: TextStyle(color: Colors.white))
+            ]
           ],
         ),
       ),

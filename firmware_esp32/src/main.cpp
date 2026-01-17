@@ -31,7 +31,7 @@ void salvarTudo() {
   memoria.putBool("violado", sistemaViolado);
   memoria.putUInt("momento_v", momentoViolacao);
   memoria.end(); 
-  Serial.println(">>> DADOS BLINDADOS NA MEMORIA FLASH <<<");
+  Serial.println(">>> ESTADO GRAVADO NA FLASH (PERMANENTE) <<<");
 }
 
 void enviarEstado() {
@@ -40,22 +40,22 @@ void enviarEstado() {
     
     if (sistemaViolado && momentoViolacao > 0) {
       uint32_t agora = rtc.now().unixtime();
-      
+
       uint32_t segundosAtras = 0;
       if (agora >= momentoViolacao) {
          segundosAtras = agora - momentoViolacao;
       }
       
       mensagem = "V:" + String(segundosAtras); 
-      Serial.println("Status: VIOLADO (" + mensagem + ")");
+      Serial.println("Enviando para App: VIOLADO (" + mensagem + ")");
     } 
     else if (sistemaArmado) {
       mensagem = "S"; 
-      Serial.println("Status: ARMADO");
+      Serial.println("Enviando para App: ARMADO");
     } 
     else {
       mensagem = "A"; 
-      Serial.println("Status: DESARMADO");
+      Serial.println("Enviando para App: DESARMADO");
     }
     
     pCharacteristic->setValue(mensagem.c_str());
@@ -120,17 +120,17 @@ class MyCallbacks: public BLECharacteristicCallbacks {
 void setup() {
   Serial.begin(115200);
   Wire.begin(MEU_SDA, MEU_SCL);
-  
+
   if (!rtc.begin()) {
     Serial.println("ERRO CRITICO: RTC NAO ENCONTRADO");
   }
-  
+
   DateTime agora = rtc.now();
   if (agora.year() < 2025) { 
-    Serial.println("RTC desatualizado! Ajustando para hora da compilacao...");
+    Serial.println("RTC perdido no tempo! Ajustando provisoriamente...");
     rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
   } else {
-    Serial.println("RTC com hora valida (Bateria OK). Mantendo contagem...");
+    Serial.println("RTC Saudavel. Mantendo horario da bateria.");
   }
   
   memoria.begin("mala_app", true);
@@ -139,9 +139,14 @@ void setup() {
   momentoViolacao = memoria.getUInt("momento_v", 0);
   memoria.end(); 
 
-  Serial.println("--- SISTEMA INICIADO ---");
-  Serial.print("Armado: "); Serial.println(sistemaArmado);
-  Serial.print("Violado: "); Serial.println(sistemaViolado);
+  Serial.println("--- DIAGNOSTICO DE BOOT ---");
+  Serial.print("Estava Armado? "); Serial.println(sistemaArmado ? "SIM" : "NAO");
+  Serial.print("Estava Violado? "); Serial.println(sistemaViolado ? "SIM" : "NAO");
+  
+  if(sistemaViolado) {
+     Serial.println(">>> ATENCAO: SISTEMA REINICIOU EM ESTADO DE VIOLACAO! <<<");
+     Serial.println("Mantendo data original da violacao.");
+  }
 
   BLEDevice::init("Mala Inteligente");
   pServer = BLEDevice::createServer();
@@ -155,17 +160,24 @@ void setup() {
 }
 
 void loop() {
-  if (sistemaArmado && !sistemaViolado) {
+
+  if (sistemaViolado) {
+      delay(1000); 
+  }
+  
+  else if (sistemaArmado) {
     if (analogRead(PINO_LDR) < LIMITE_LUZ) {
-      
+
       sistemaViolado = true;
       momentoViolacao = rtc.now().unixtime(); 
       
-      Serial.println("!!! VIOLACAO REGISTRADA !!!");
-      
+      Serial.println("!!! VIOLACAO DETECTADA AGORA !!!");
+
       salvarTudo(); 
+
       enviarEstado(); 
     }
   }
+  
   delay(200);
 }

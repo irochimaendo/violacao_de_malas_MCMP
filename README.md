@@ -1,131 +1,138 @@
-# 🧳 Violação de Malas
+# Sistema IoT para Detecção de Violação de Malas
 
-Sistema de detecção de violação de malas baseado em **ESP32** e **sensores LDR**, com aplicativo **Flutter** que se comunica por **Bluetooth Low Energy (BLE)** para monitorar, configurar e alertar sobre a abertura da mala em tempo real.
+Projeto de um sistema embarcado para detectar possíveis violações em malas por meio de sensores de luminosidade, utilizando um microcontrolador ESP32-C3 e comunicação Bluetooth Low Energy (BLE).
 
----
+A proposta é identificar alterações nas condições internas da mala que possam indicar sua abertura indevida, oferecendo uma solução de monitoramento baseada em hardware de baixo custo, firmware embarcado e comunicação sem fio.
 
-## 📖 Visão geral
+## Sobre o projeto
 
-Quando uma mala é aberta, a luz externa entra no compartimento interno. O projeto aproveita isso: um ou mais sensores LDR (resistores dependentes de luz) instalados dentro da mala medem continuamente a luminosidade. Se o nível ultrapassa um limiar configurado, o ESP32 interpreta como **possível violação** e notifica o aplicativo no celular, que dispara o alerta ao usuário.
+O sistema utiliza um conjunto de quatro sensores LDR (*Light Dependent Resistors*) para monitorar a luminosidade no interior da mala. As leituras são processadas pelo microcontrolador, que utiliza uma calibração dinâmica para estabelecer uma referência e identificar variações relevantes nos valores medidos.
 
-## ✨ Funcionalidades
+O projeto também contempla parâmetros configuráveis de tolerância, permitindo ajustar a sensibilidade da detecção, além de um buffer circular para armazenamento temporário de dados.
 
-- 🔍 **Monitoramento** em tempo real do estado da mala (fechada / aberta) e das leituras dos sensores
-- ⚙️ **Configuração** pelo app (ex.: sensibilidade/limiar de detecção, ativar/desativar monitoramento)
-- 🚨 **Alerta** no celular quando a abertura é detectada
-- 📡 **Comunicação BLE** entre o ESP32 e o app, sem necessidade de internet
-- 💾 **Persistência local** das configurações no aparelho
+A comunicação Bluetooth Low Energy permite a integração com uma aplicação móvel desenvolvida em Flutter, possibilitando a interação com o sistema sem a necessidade de uma conexão física com o microcontrolador.
 
-## 🏗️ Arquitetura
+### Objetivos
 
-```
-┌──────────────┐   luminosidade   ┌─────────────┐    BLE     ┌──────────────────┐
-│ Sensores LDR │ ───────────────► │    ESP32    │ ◄────────► │   App Flutter    │
-│ (dentro da   │   (ADC)          │  (firmware) │  notific./ │ monitorar,       │
-│   mala)      │                  │             │  comandos  │ configurar,      │
-└──────────────┘                  └─────────────┘            │ alertar          │
-                                                             └──────────────────┘
-```
+- Detectar alterações de luminosidade que possam indicar a abertura da mala.
+- Implementar a leitura e o processamento de sensores em um microcontrolador.
+- Utilizar calibração dinâmica para estabelecer referências de medição.
+- Permitir a configuração da tolerância utilizada na detecção.
+- Explorar a comunicação BLE entre um dispositivo embarcado e uma aplicação móvel.
+- Integrar hardware, firmware e software em uma solução IoT.
 
-**Fluxo:**
-1. O ESP32 lê os LDRs pelo conversor analógico-digital (ADC).
-2. Compara as leituras com o limiar de abertura.
-3. Envia o estado/leituras ao app por BLE.
-4. O app exibe o status e emite o alerta quando detecta a violação.
-5. Configurações alteradas no app são enviadas de volta ao ESP32.
+## Arquitetura do sistema
 
-## 🧰 Tecnologias
+O projeto é composto por três elementos principais:
 
-| Camada | Tecnologia |
+| Componente | Responsabilidade |
 |---|---|
-| Microcontrolador | ESP32 |
-| Sensores | LDR (fotorresistor) |
-| Comunicação | Bluetooth Low Energy |
-| App | Flutter / Dart (SDK ^3.10.4) |
-| BLE no app | [`flutter_blue_plus`](https://pub.dev/packages/flutter_blue_plus) |
-| Permissões | [`permission_handler`](https://pub.dev/packages/permission_handler) |
-| Armazenamento local | [`shared_preferences`](https://pub.dev/packages/shared_preferences), [`path_provider`](https://pub.dev/packages/path_provider) |
-| Utilidades | `intl`, `path`, `camera` |
+| Sensores LDR | Detectar variações na luminosidade do ambiente monitorado. |
+| ESP32-C3 | Realizar as leituras dos sensores, executar a lógica de detecção e gerenciar a comunicação sem fio. |
+| Aplicação móvel em Flutter | Fornecer uma interface para interação com o sistema por meio de Bluetooth Low Energy. |
 
-## 📁 Estrutura do repositório
+De forma simplificada, o fluxo de funcionamento é:
 
-```
-violacao_de_malas_MCMP/
-├── firmware_esp32/   # Código do ESP32 (leitura dos LDRs + servidor BLE)
-├── lib/              # Código-fonte do app Flutter (Dart)
-├── android/          # Projeto nativo Android
-├── ios/              # Projeto nativo iOS
-├── web/ linux/ macos/ windows/   # Plataformas geradas pelo Flutter
-├── test/             # Testes
-└── pubspec.yaml      # Dependências do app
-```
+1. O conjunto de sensores detecta a luminosidade no interior da mala.
+2. O ESP32-C3 realiza a leitura do sinal elétrico associado aos sensores.
+3. O firmware utiliza a calibração dinâmica para estabelecer uma referência de funcionamento.
+4. As leituras são avaliadas considerando a tolerância configurada.
+5. O sistema identifica variações que atendam aos critérios de detecção implementados.
+6. A comunicação BLE permite a interação entre o dispositivo embarcado e a aplicação móvel.
 
-## 🔌 Hardware
+A detecção depende das condições de instalação dos sensores e dos critérios implementados no firmware. Uma alteração de luminosidade é um indício que pode ser utilizado pelo sistema, mas não comprova, isoladamente, que houve uma violação da mala.
 
-### Materiais
-- 1× placa ESP32-c3 supermini
-- `4`× sensor LDR
-- `1`× potenciômetro de 10 kΩ (divisor de tensão para cada LDR)
-- Protoboard, jumpers e fonte de alimentação
+## Hardware
 
-### Ligações
+### Microcontrolador
 
-O arranjo em paralelo dos sensores LDR forma um divisor de tensão com o potenciômetro fixo, e o ponto central vai a uma entrada ADC do ESP32:
-```
-3V3 ──[ LDR ]──┬──[ R fixo ]── GND
-               │
-            GPIO <pino ADC>
-```
+**ESP32-C3**
 
-> 💡 Prefira pinos do **ADC1**, pois o ADC2 fica indisponível quando o Wi-Fi/BLE está em uso em alguns cenários.
+O ESP32-C3 é responsável pela aquisição dos sinais dos sensores, pelo processamento das leituras e pela comunicação Bluetooth Low Energy.
 
-## 🚀 Como executar
+### Sensores de luminosidade
 
-### 1. Firmware (ESP32)
+O circuito utiliza um arranjo de **quatro LDRs conectados em paralelo**, associado a uma única entrada GPIO do microcontrolador.
 
-1. Abra a pasta `firmware_esp32/` na IDE (`<Arduino IDE / PlatformIO / ESP-IDF>`).
-2. Instale as bibliotecas necessárias (`<listar>`).
-3. Selecione a placa **ESP32** e a porta serial correta.
-4. Compile e faça o upload.
-5. Abra o monitor serial (`<baud rate>`) para conferir as leituras.
+O circuito também utiliza um **potenciômetro de 10 kΩ**, posicionado entre o arranjo de sensores e o pino GPIO, conforme a montagem do projeto.
 
-### 2. Aplicativo (Flutter)
+O uso do conjunto de sensores permite monitorar a luminosidade em diferentes pontos, enquanto a leitura compartilhada concentra o sinal do arranjo em uma única entrada do microcontrolador.
 
-**Pré-requisitos:** [Flutter SDK](https://docs.flutter.dev/get-started/install) compatível com Dart ^3.10.4 e um dispositivo físico (BLE não funciona de forma confiável em emuladores).
+É importante considerar que, em uma ligação paralela, os quatro LDRs não fornecem quatro leituras independentes: o microcontrolador recebe o sinal elétrico resultante da configuração do circuito.
 
-```bash
-git clone https://github.com/irochimaendo/violacao_de_malas_MCMP.git
-cd violacao_de_malas_MCMP
-flutter pub get
-flutter run
-```
+### Componentes principais
 
-**Permissões:** ao abrir o app, conceda as permissões de Bluetooth (e localização no Android, quando exigido para varredura BLE).
+- ESP32-C3.
+- 4 sensores LDR conectados em paralelo.
+- 1 potenciômetro de 10 kΩ.
+- Circuito de conexão entre os sensores e a entrada GPIO.
+- Dispositivo móvel compatível com Bluetooth Low Energy para comunicação com a aplicação.
 
-## 📲 Como usar
+## Firmware embarcado
 
-1. Alimente o ESP32 dentro da mala e **feche-a**.
-2. Abra o app e conceda as permissões de Bluetooth.
-3. Procure e **conecte** ao dispositivo.
-5. Ative o monitoramento. Se a mala for aberta, o app dispara o alerta.
+O firmware executado no ESP32-C3 é responsável por coordenar a aquisição de dados, o processamento das leituras e a comunicação com a aplicação móvel.
 
-## 📡 Protocolo BLE
+Entre os recursos contemplados pelo projeto estão:
 
-| Item | Valor |
+- **Aquisição de dados:** leitura do sinal proveniente do conjunto de sensores.
+- **Calibração dinâmica:** estabelecimento de uma referência a partir das condições de funcionamento do sistema.
+- **Tolerância configurável:** ajuste do critério utilizado para avaliar as variações detectadas.
+- **Buffer circular:** armazenamento temporário de dados com reutilização das posições do buffer.
+- **Comunicação BLE:** troca de informações entre o dispositivo embarcado e a aplicação móvel.
+
+Esses recursos permitem explorar aspectos importantes do desenvolvimento de sistemas embarcados, incluindo leitura de sensores, processamento de sinais, gerenciamento de memória e comunicação sem fio.
+
+## Comunicação Bluetooth Low Energy
+
+O sistema utiliza Bluetooth Low Energy (BLE) para estabelecer a comunicação entre o ESP32-C3 e a aplicação móvel.
+
+Essa tecnologia permite a interação sem fio com o dispositivo, sendo adequada para aplicações IoT que precisam trocar pequenas quantidades de dados com baixo consumo de energia.
+
+A comunicação entre os componentes depende dos serviços, das características e do protocolo implementados no firmware e na aplicação.
+
+## Aplicação móvel
+
+O projeto contempla uma aplicação móvel desenvolvida com Flutter para interação com o sistema embarcado.
+
+A utilização do Flutter permite desenvolver a interface da aplicação utilizando uma base de código multiplataforma, enquanto o BLE fornece o canal de comunicação com o ESP32-C3.
+
+A aplicação faz parte da arquitetura do projeto, conectando o funcionamento do dispositivo físico à interação com o usuário.
+
+## Tecnologias utilizadas
+
+| Tecnologia | Aplicação no projeto |
 |---|---|
-| Nome do dispositivo | `<nome>` |
-| Service UUID | `<uuid>` |
-| Característica de leitura/notificação | `<uuid>` — estado/leituras dos LDRs |
-| Característica de configuração | `<uuid>` — envio de limiar e comandos |
+| C/C++ | Desenvolvimento do firmware embarcado. |
+| ESP32-C3 | Plataforma de processamento e comunicação. |
+| LDR | Detecção de variações de luminosidade. |
+| GPIO | Aquisição do sinal elétrico proveniente do circuito de sensores. |
+| Bluetooth Low Energy (BLE) | Comunicação sem fio entre o microcontrolador e a aplicação. |
+| Flutter | Desenvolvimento da aplicação móvel. |
+| Git e GitHub | Controle de versão e organização do código-fonte. |
+| LaTeX | Elaboração da documentação técnica do projeto. |
 
-## 🛣️ Melhorias futuras
+## Conceitos aplicados
 
-- [ ] Calibração automática do limiar conforme a luz ambiente
-- [ ] Histórico de eventos de abertura com data e hora
-- [ ] Notificações em segundo plano com o app fechado
-- [ ] Modo de baixo consumo (deep sleep) para economizar bateria
-- [ ] Reconexão automática ao dispositivo
+O desenvolvimento do sistema envolve diferentes áreas da Engenharia de Computação:
 
-## 👥 Autores
+- Sistemas embarcados e programação de microcontroladores.
+- Aquisição de dados provenientes de sensores.
+- Eletrônica aplicada à instrumentação.
+- Processamento e interpretação de leituras.
+- Algoritmos de calibração e detecção de variações.
+- Estruturas de dados, incluindo buffers circulares.
+- Comunicação sem fio utilizando BLE.
+- Integração entre firmware e aplicação móvel.
+- Documentação técnica de projetos de engenharia.
 
-- `<seu nome>` — [@irochimaendo](https://github.com/irochimaendo)
+## Contexto acadêmico
+
+O projeto foi desenvolvido no contexto acadêmico, com foco na construção de uma solução IoT para monitoramento de malas.
+
+Além da implementação do sistema, o trabalho envolve a integração de componentes de hardware e software, a definição de critérios de detecção e a documentação técnica da solução.
+
+O projeto permite aplicar conhecimentos de programação, eletrônica, sistemas embarcados e comunicação entre dispositivos em um problema prático.
+
+## Licença
+
+A utilização e a redistribuição do código-fonte estão sujeitas à licença definida no repositório.

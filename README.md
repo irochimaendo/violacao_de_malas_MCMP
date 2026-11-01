@@ -132,7 +132,3 @@ O projeto foi desenvolvido no contexto acadêmico, com foco na construção de u
 Além da implementação do sistema, o trabalho envolve a integração de componentes de hardware e software, a definição de critérios de detecção e a documentação técnica da solução.
 
 O projeto permite aplicar conhecimentos de programação, eletrônica, sistemas embarcados e comunicação entre dispositivos em um problema prático.
-
-## Licença
-
-A utilização e a redistribuição do código-fonte estão sujeitas à licença definida no repositório.

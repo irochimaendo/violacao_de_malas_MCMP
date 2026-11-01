@@ -10,7 +10,13 @@
 #define MEU_SDA 8
 #define MEU_SCL 9
 #define PINO_LDR 0 
-#define LIMITE_LUZ 4000 
+
+// ---- Calibração e detecção de violação ----
+#define LIMITE_LUZ_PADRAO 2000        // valor inicial, usado só antes da primeira calibração (ARMAR)
+#define TOLERANCIA_PERCENTUAL 5.0     // % de variação aceitável (pra mais ou pra menos) em torno do LIMITE_LUZ
+#define TAMANHO_BUFFER 10             // nº de leituras consecutivas usadas para calcular a média
+#define INTERVALO_LEITURA_MS 100      // intervalo entre leituras rápidas enquanto armado (ms)
+#define INTERVALO_CALIBRACAO_MS 15    // intervalo entre leituras durante a calibração do LIMITE_LUZ (ms)
 
 RTC_DS3231 rtc;
 Preferences memoria;
@@ -22,14 +28,54 @@ bool sistemaArmado = false;
 bool sistemaViolado = false;  
 uint32_t momentoViolacao = 0;
 
+int limiteLuz = LIMITE_LUZ_PADRAO;   // calibrado dinamicamente a cada "ARMAR" (mala fechada)
+
+// Buffer (janela deslizante) com as últimas leituras do LDR, usado para tirar a média
+int bufferLeituras[TAMANHO_BUFFER];
+int indiceBuffer = 0;
+int amostrasNoBuffer = 0;
+unsigned long ultimaLeituraMs = 0;
+
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
+
+void resetarBuffer() {
+  indiceBuffer = 0;
+  amostrasNoBuffer = 0;
+}
+
+void adicionarLeituraBuffer(int valor) {
+  bufferLeituras[indiceBuffer] = valor;
+  indiceBuffer = (indiceBuffer + 1) % TAMANHO_BUFFER;
+  if (amostrasNoBuffer < TAMANHO_BUFFER) amostrasNoBuffer++;
+}
+
+float calcularMediaBuffer() {
+  long soma = 0;
+  for (int i = 0; i < amostrasNoBuffer; i++) {
+    soma += bufferLeituras[i];
+  }
+  return amostrasNoBuffer > 0 ? (float)soma / amostrasNoBuffer : 0.0;
+}
+
+// Faz várias leituras rápidas e tira a média -> usado para calibrar o LIMITE_LUZ
+// no momento em que a mala é "fechada" (ARMAR), evitando que uma única leitura
+// ruidosa do LDR vire a referência de todo o monitoramento
+int capturarLuminosidadeBase() {
+  long soma = 0;
+  for (int i = 0; i < TAMANHO_BUFFER; i++) {
+    soma += analogRead(PINO_LDR);
+    delay(INTERVALO_CALIBRACAO_MS);
+  }
+  return (int)(soma / TAMANHO_BUFFER);
+}
 
 void salvarTudo() {
   memoria.begin("mala_app", false); 
   memoria.putBool("armado", sistemaArmado);
   memoria.putBool("violado", sistemaViolado);
   memoria.putUInt("momento_v", momentoViolacao);
+  memoria.putInt("limite_luz", limiteLuz);
   memoria.end(); 
   Serial.println(">>> ESTADO GRAVADO NA FLASH (PERMANENTE) <<<");
 }
@@ -86,13 +132,23 @@ class MyCallbacks: public BLECharacteristicCallbacks {
         enviarEstado(); 
       }
       else if (comando == "ARMAR") {
+        // Mala sendo "fechada" agora: captura a luminosidade atual (média de
+        // várias leituras rápidas) e usa como nova referência (LIMITE_LUZ)
+        // para este ciclo de monitoramento
+        limiteLuz = capturarLuminosidadeBase();
+        resetarBuffer();
+        ultimaLeituraMs = millis();
+
         sistemaArmado = true;
         sistemaViolado = false;
         momentoViolacao = 0;
         salvarTudo(); 
         enviarEstado();
+
+        Serial.println(">>> Novo LIMITE_LUZ calibrado: " + String(limiteLuz));
       } 
       else if (comando == "RESET") {
+        resetarBuffer();
         sistemaArmado = false;
         sistemaViolado = false;
         momentoViolacao = 0;
@@ -137,11 +193,13 @@ void setup() {
   sistemaArmado = memoria.getBool("armado", false);
   sistemaViolado = memoria.getBool("violado", false);
   momentoViolacao = memoria.getUInt("momento_v", 0);
+  limiteLuz = memoria.getInt("limite_luz", LIMITE_LUZ_PADRAO);
   memoria.end(); 
 
   Serial.println("--- DIAGNOSTICO DE BOOT ---");
   Serial.print("Estava Armado? "); Serial.println(sistemaArmado ? "SIM" : "NAO");
   Serial.print("Estava Violado? "); Serial.println(sistemaViolado ? "SIM" : "NAO");
+  Serial.print("LIMITE_LUZ calibrado: "); Serial.println(limiteLuz);
   
   if(sistemaViolado) {
      Serial.println(">>> ATENCAO: SISTEMA REINICIOU EM ESTADO DE VIOLACAO! <<<");
@@ -166,18 +224,36 @@ void loop() {
   }
   
   else if (sistemaArmado) {
-    if (analogRead(PINO_LDR) < LIMITE_LUZ) {
+    unsigned long agoraMs = millis();
 
-      sistemaViolado = true;
-      momentoViolacao = rtc.now().unixtime(); 
-      
-      Serial.println("!!! VIOLACAO DETECTADA AGORA !!!");
+    if (agoraMs - ultimaLeituraMs >= INTERVALO_LEITURA_MS) {
+      ultimaLeituraMs = agoraMs;
 
-      salvarTudo(); 
+      int leituraAtual = analogRead(PINO_LDR);
+      adicionarLeituraBuffer(leituraAtual);
 
-      enviarEstado(); 
+      // só avalia violação depois de já ter TAMANHO_BUFFER leituras consecutivas
+      // (assim 1 leitura pontual fora da faixa, isolada, nunca dispara o alarme)
+      if (amostrasNoBuffer >= TAMANHO_BUFFER) {
+        float media = calcularMediaBuffer();
+        float limiteInferior = limiteLuz * (1.0 - TOLERANCIA_PERCENTUAL / 100.0);
+        float limiteSuperior = limiteLuz * (1.0 + TOLERANCIA_PERCENTUAL / 100.0);
+
+        if (media < limiteInferior || media > limiteSuperior) {
+
+          sistemaViolado = true;
+          momentoViolacao = rtc.now().unixtime(); 
+          
+          Serial.println("!!! VIOLACAO DETECTADA (media=" + String(media) +
+                          ", faixa aceita=[" + String(limiteInferior) + " , " + String(limiteSuperior) + "]) !!!");
+
+          salvarTudo(); 
+
+          enviarEstado(); 
+        }
+      }
     }
   }
   
-  delay(200);
+  delay(10);
 }

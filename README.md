@@ -63,25 +63,19 @@ violacao_de_malas_MCMP/
 ## 🔌 Hardware
 
 ### Materiais
-- 1× placa ESP32 (`<modelo, ex.: ESP32 DevKit V1>`)
-- `<N>`× sensor LDR
-- `<N>`× resistor de `<valor, ex.: 10 kΩ>` (divisor de tensão para cada LDR)
-- Protoboard/PCB, jumpers e fonte de alimentação (`<bateria / power bank>`)
+- 1× placa ESP32-c3 supermini
+- `4`× sensor LDR
+- `1`× potenciômetro de 10 kΩ (divisor de tensão para cada LDR)
+- Protoboard, jumpers e fonte de alimentação
 
 ### Ligações
 
-Cada LDR forma um divisor de tensão com um resistor fixo, e o ponto central vai a uma entrada ADC do ESP32:
-
+O arranjo em paralelo dos sensores LDR forma um divisor de tensão com o potenciômetro fixo, e o ponto central vai a uma entrada ADC do ESP32:
 ```
 3V3 ──[ LDR ]──┬──[ R fixo ]── GND
                │
             GPIO <pino ADC>
 ```
-
-| Componente | Pino do ESP32 |
-|---|---|
-| LDR 1 | `GPIO <xx>` |
-| LDR 2 | `GPIO <xx>` |
 
 > 💡 Prefira pinos do **ADC1**, pois o ADC2 fica indisponível quando o Wi-Fi/BLE está em uso em alguns cenários.
 
@@ -112,8 +106,7 @@ flutter run
 
 1. Alimente o ESP32 dentro da mala e **feche-a**.
 2. Abra o app e conceda as permissões de Bluetooth.
-3. Procure e **conecte** ao dispositivo (`<nome BLE, ex.: "MalaSegura">`).
-4. Ajuste o **limiar de detecção** conforme a luminosidade do ambiente.
+3. Procure e **conecte** ao dispositivo.
 5. Ative o monitoramento. Se a mala for aberta, o app dispara o alerta.
 
 ## 📡 Protocolo BLE
@@ -136,8 +129,3 @@ flutter run
 ## 👥 Autores
 
 - `<seu nome>` — [@irochimaendo](https://github.com/irochimaendo)
-- `<colegas de equipe, se houver>`
-
-## 📄 Licença
-
-`<definir, ex.: MIT>`
